@@ -1,4 +1,4 @@
-package playersync.client.liteloader;
+package playersync.client.mod;
 
 import com.google.common.collect.ImmutableList;
 import com.mojang.realmsclient.dto.RealmsServer;
@@ -11,16 +11,13 @@ import net.minecraft.network.INetHandler;
 import net.minecraft.network.PacketBuffer;
 import net.minecraft.network.play.server.SPacketJoinGame;
 import playersync.client.ClientSyncManager;
-import playersync.client.api.IPlayerSync;
-import playersync.client.api.SyncManager;
+import playersync.client.api.PlayerSync;
 
 import java.io.File;
 import java.util.List;
 
-import static playersync.Constants.CHANNEL;
-
 @Priority(500)
-public class LiteModPlayerSync implements IPlayerSync, JoinGameListener, PluginChannelListener {
+public class LiteModPlayerSync implements JoinGameListener, PluginChannelListener{
 
     private ClientSyncManager client;
 
@@ -31,12 +28,13 @@ public class LiteModPlayerSync implements IPlayerSync, JoinGameListener, PluginC
 
     @Override
     public String getVersion() {
-        return "0.1-SNAPSHOT";
+        return "@VERSION@";
     }
 
     @Override
     public void init(File configPath) {
         this.client = new ClientSyncManager();
+        PlayerSync.setManager(this.client);
     }
 
     @Override
@@ -44,25 +42,19 @@ public class LiteModPlayerSync implements IPlayerSync, JoinGameListener, PluginC
     }
 
     @Override
-    public SyncManager getPlayerSyncManager() {
-        return client;
-    }
-
-    @Override
     public void onJoinGame(INetHandler netHandler, SPacketJoinGame joinGamePacket, ServerData serverData, RealmsServer realmsServer) {
-
         this.client.setClient((NetHandlerPlayClient) netHandler);
     }
 
     @Override
     public List<String> getChannels() {
-        return ImmutableList.of(CHANNEL);
+        return ImmutableList.of(ClientSyncManager.CHANNEL);
     }
 
     @Override
     public void onCustomPayload(String channel, PacketBuffer data) {
-        if (CHANNEL.equals(channel))
-            this.client.onPayload(data);
+        if (ClientSyncManager.CHANNEL.equals(channel))
+            this.client.receiveData(new PacketBuffer(data.copy()));
     }
 
 }

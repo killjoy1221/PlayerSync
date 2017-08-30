@@ -12,25 +12,38 @@ buildscript {
         }
     }
     dependencies {
-        classpath 'net.minecraftforge.gradle:ForgeGradle:2.2-SNAPSHOT'
+        classpath 'net.minecraftforge.gradle:ForgeGradle:2.3-SNAPSHOT'
     }
 }
 apply plugin: 'net.minecraftforge.gradle.liteloader'
+apply plugin: 'maven'
 
 archivesBaseName = 'playersync-client'
-version = '0.3'
+version = '1.0'
 group = 'psync'
 
 minecraft {
-    version = "1.11.2"
-    mappings = "snapshot_20161224"
+    version = "1.12.1"
+    mappings = "snapshot_20170829"
     runDir = "run"
+
+    replace '@VERSION@', project.version
 }
 
 litemod.json {
     name = "playersync"
 }
 jar {
-	baseName "mod-$project.archivesBaseName"
+	baseName = "mod-$project.archivesBaseName"
     from litemod
+}
+task devJar(type: Jar) {
+    from sourceSets.main.output
+    from litemod
+}
+artifacts.archives devJar
+reobf {
+    devJar {
+        mappingType = 'SEARGE'
+    }
 }

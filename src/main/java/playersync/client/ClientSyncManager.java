@@ -1,6 +1,10 @@
 package playersync.client;
 
-import com.google.common.base.Preconditions;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
+
+import com.google.common.collect.BiMap;
+import com.google.common.collect.HashBiMap;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import io.netty.buffer.Unpooled;
@@ -11,101 +15,116 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import playersync.client.api.ChannelHandler;
 import playersync.client.api.PacketSerializer;
+import playersync.client.api.SettingsHandler;
 import playersync.client.api.SyncManager;
+import playersync.client.data.CClientData;
+import playersync.client.data.CRegisterData;
+import playersync.client.data.SChannelData;
+import playersync.client.data.SHelloData;
 
+import java.io.IOException;
+import java.util.Map;
+import java.util.Set;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
-import java.util.Arrays;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Set;
-import java.util.UUID;
-
-import static playersync.Constants.*;
 
 @SuppressWarnings("unchecked")
 public class ClientSyncManager implements SyncManager {
 
-    private static Logger logger = LogManager.getLogger(CHANNEL);
+    public static final String CHANNEL = "pSync";
+    public static Logger logger = LogManager.getLogger("PlayerSync");
 
     @Nullable
     private NetHandlerPlayClient client;
+    @Nullable
+    private ClientDataHandler dataHandler;
 
     private Set<String> channels = Sets.newHashSet();
     private Map<String, PacketSerializer<?>> channelSerializers = Maps.newHashMap();
     private Map<String, ChannelHandler<?>> channelHandlers = Maps.newHashMap();
     private Map<String, Object> channelDefaults = Maps.newHashMap();
+    private Map<String, SettingsHandler> settings = Maps.newHashMap();
 
-    private void sendHelloPacket(@Nonnull NetHandlerPlayClient client) {
+    private BiMap<Integer, Class<? extends Data<?>>> dataPackets = HashBiMap.create();
 
-        PacketBuffer buffer = new PacketBuffer(Unpooled.buffer());
-        buffer.writeString(REGISTER);
-        buffer.writeVarInt(channels.size());
-        for (String channel : channels) {
-            buffer.writeString(channel);
-        }
-
-        client.sendPacket(new CPacketCustomPayload(CHANNEL, buffer));
-
-        onHelloResponse();
+    public ClientSyncManager() {
+        dataPackets.put(0, SHelloData.class);
+        dataPackets.put(1, CRegisterData.class);
+        dataPackets.put(2, SChannelData.class);
+        dataPackets.put(3, CClientData.class);
     }
 
-    private void onHelloResponse() {
-        logger.info("Servpai noticed me!");
-        for (Entry<String, ? super Object> a : channelDefaults.entrySet()) {
-            sendPacket(a.getKey(), a.getValue());
-        }
-    }
+    public void sendData(Data<? extends IServerDataHandler> data) {
 
-    public <T> void onPayload(PacketBuffer buffer) {
-        String chan = buffer.readString(20);
-        if (ACKNOWLEDGE.equals(chan)) {
-            sendHelloPacket(client);
-            return;
-        }
-        if (!this.channels.contains(chan)) {
-            logger.warn("Got packet for unknown channel " + chan + ". Ignoring");
-            return;
-        }
-        PacketSerializer<T> serializer = (PacketSerializer<T>) this.channelSerializers.get(chan);
-        ChannelHandler<T> handler = (ChannelHandler<T>) this.channelHandlers.get(chan);
-        try {
-            int len = buffer.readVarInt();
-            for (int i = 0; i < len; i++) {
-                UUID uuid = buffer.readUniqueId();
-                T packet = serializer.deserialize(buffer);
-                handler.handle(chan, uuid, packet);
+        if (client != null) {
+            try {
+                int index = dataPackets.inverse().getOrDefault(data.getClass(), -1);
+                checkArgument(index >= 0, "%s is not a registered data packet.", data.getClass());
+
+                PacketBuffer buffer = new PacketBuffer(Unpooled.buffer());
+                buffer.writeByte(index);
+                data.write(buffer);
+
+                this.client.sendPacket(new CPacketCustomPayload(CHANNEL, buffer));
+            } catch (Exception e) {
+                logger.warn("Unable to send packet.", e);
             }
-        } catch (IndexOutOfBoundsException e) {
-            logger.info(e);
         }
     }
 
+    @SuppressWarnings("unchecked")
+    public void receiveData(PacketBuffer buffer) {
+        try {
+            if (this.dataHandler != null) {
+                int index = buffer.readByte();
+                Class<? extends Data<?>> dataClass = dataPackets.get(index);
+
+
+                checkNotNull(dataClass, "Unknown data packet ID: %s", index);
+
+                Data<IClientDataHandler> data = (Data<IClientDataHandler>) dataClass.newInstance();
+
+                data.read(buffer);
+
+                if (buffer.isReadable()) {
+                    throw new IOException(dataClass + " did not read the entire packet.");
+                }
+
+                data.process(this.dataHandler);
+            }
+        } catch (Exception e) {
+            logger.warn("Unable to process packet.", e);
+        }
+
+    }
+
+    @Override
     public <T> void sendPacket(String chan, T packet) {
         if (this.client != null && this.client.getNetworkManager().isChannelOpen()) {
 
+            checkArgument(this.channels.contains(chan), "There is no channel registered for {}", chan);
             if (!this.channels.contains(chan))
-                throw new IllegalArgumentException("There is no channel registered for " + chan);
+                throw new IllegalArgumentException();
 
             PacketSerializer<T> serializer = (PacketSerializer<T>) this.channelSerializers.get(chan);
-            PacketBuffer buffer = new PacketBuffer(Unpooled.buffer());
-            // this will be sent to clients exactly
-            buffer.writeString(chan);
-            serializer.serialize(packet, buffer);
+            try {
+                PacketBuffer buffer = new PacketBuffer(Unpooled.buffer());
+                // this will be sent to clients exactly
+                serializer.serialize(packet, buffer);
 
-            this.client.sendPacket(new CPacketCustomPayload(CHANNEL, buffer));
-
+                sendData(new CClientData(chan, buffer));
+            } catch (IOException e) {
+                logger.warn(e);
+            }
         }
     }
 
     @Override
     public <T> void register(String channel, PacketSerializer<T> serializer, ChannelHandler<T> handler, T def) {
-        Preconditions.checkArgument(isChannelValid(channel), "Channel name " + channel + " is reserved.");
-        Preconditions.checkNotNull(channel, "channel cannot be null.");
-        Preconditions.checkNotNull(serializer, "serializer cannot be null.");
-        Preconditions.checkNotNull(handler, "handler cannot be null.");
-        Preconditions.checkNotNull(def, "default cannot be null.");
-
+        checkNotNull(channel, "channel cannot be null.");
+        checkNotNull(serializer, "serializer cannot be null.");
+        checkNotNull(handler, "handler cannot be null.");
+        checkNotNull(def, "default cannot be null.");
 
         this.channels.add(channel);
         this.channelDefaults.put(channel, def);
@@ -113,11 +132,36 @@ public class ClientSyncManager implements SyncManager {
         this.channelSerializers.put(channel, serializer);
     }
 
-    private boolean isChannelValid(String channel) {
-        return !Arrays.asList(REGISTER, UNREGISTER, ACKNOWLEDGE).contains(channel);
+    @Override
+    public void registerConfig(String id, SettingsHandler handler) {
+        checkNotNull(id, "config id cannot be null");
+        checkNotNull(handler, "handler cannot be null");
+
+        this.settings.put(id, handler);
     }
 
     public void setClient(@Nonnull NetHandlerPlayClient client) {
         this.client = client;
+        this.dataHandler = new ClientDataHandler(this, client);
+    }
+
+    public Set<String> getChannels() {
+        return channels;
+    }
+
+    public Map<String, SettingsHandler> getSettings() {
+        return settings;
+    }
+
+    public Map<String, Object> getChannelDefaults() {
+        return channelDefaults;
+    }
+
+    public <T> PacketSerializer<T> getChannelSerializer(String chan) {
+        return (PacketSerializer<T>) this.channelSerializers.get(chan);
+    }
+
+    public <T> ChannelHandler<T> getChannelHandler(String chan) {
+        return (ChannelHandler<T>) this.channelHandlers.get(chan);
     }
 }
