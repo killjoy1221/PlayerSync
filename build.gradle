@@ -19,12 +19,12 @@ apply plugin: 'net.minecraftforge.gradle.liteloader'
 apply plugin: 'maven'
 
 archivesBaseName = 'playersync-client'
-version = '1.0'
+version = '1.1'
 group = 'psync'
 
 minecraft {
-    version = "1.12.1"
-    mappings = "snapshot_20170829"
+    version = "1.12.2"
+    mappings = "snapshot_20170919"
     runDir = "run"
 
     replace '@VERSION@', project.version
@@ -32,6 +32,7 @@ minecraft {
 
 litemod.json {
     name = "playersync"
+    mcversion = '1.12.r2'
 }
 jar {
 	baseName = "mod-$project.archivesBaseName"

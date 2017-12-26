@@ -47,7 +47,7 @@ public class ClientDataHandler implements IClientDataHandler {
     public void handleChannelData(SChannelData channelData) {
 
         String chan = channelData.getChannel();
-        checkArgument(manager.getChannels().contains(chan), "Got packet for unknown channel {}. Ignoring", chan);
+        checkArgument(manager.getChannels().contains(chan), "Got packet for unknown channel %s. Ignoring", chan);
 
         PacketSerializer<Object> serializer = manager.getChannelSerializer(chan);
         ChannelHandler<Object> handler = manager.getChannelHandler(chan);
